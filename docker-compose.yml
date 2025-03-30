@@ -1,0 +1,154 @@
+version: "3.8"
+
+services:
+  # Kong API Gateway
+  kong-database:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: kong
+      POSTGRES_DB: kong
+      POSTGRES_PASSWORD: kongpass
+    volumes:
+      - kong_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "kong"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  kong-migration:
+    image: kong:2.7
+    depends_on:
+      - kong-database
+    environment:
+      KONG_DATABASE: postgres
+      KONG_PG_HOST: kong-database
+      KONG_PG_USER: kong
+      KONG_PG_PASSWORD: kongpass
+    command: kong migrations bootstrap
+
+  kong:
+    image: kong:2.7
+    depends_on:
+      - kong-migration
+      - kong-database
+    environment:
+      KONG_DATABASE: postgres
+      KONG_PG_HOST: kong-database
+      KONG_PG_USER: kong
+      KONG_PG_PASSWORD: kongpass
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_ADMIN_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_LISTEN: 0.0.0.0:8001
+      KONG_ADMIN_GUI_URL: http://localhost:8002
+    ports:
+      - "8000:8000" # Kong proxy
+      - "8001:8001" # Kong admin API
+      - "8002:8002" # Kong admin GUI
+      - "8443:8443" # Kong proxy (HTTPS)
+      - "8444:8444" # Kong admin API (HTTPS)
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  # Microservices
+  product-service:
+    build: ./services/product
+    environment:
+      MONGO_URI: mongodb://mongo:27017/products
+    depends_on:
+      - mongo
+    ports:
+      - "3001:3000"
+
+  # inventory-service:
+  #   build: ./services/inventory
+  #   environment:
+  #     DATABASE_URL: postgresql://postgres:postgres@postgres:5432/inventory
+  #   depends_on:
+  #     - postgres
+  #   ports:
+  #     - "3002:5000"
+
+  # cart-service:
+  #   build: ./services/cart
+  #   environment:
+  #     REDIS_URL: redis://redis:6379
+  #     USER_SERVICE_URL: http://user-service:3000
+  #     PRODUCT_SERVICE_URL: http://product-service:3000
+  #   depends_on:
+  #     - redis
+  #     - user-service
+  #     - product-service
+  #   ports:
+  #     - "3003:8080"
+
+  user-service:
+    build: ./services/user
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/users
+      JWT_SECRET: your_jwt_secret_key
+    depends_on:
+      - postgres
+    ports:
+      - "3004:3000"
+
+  # Databases
+  mongo:
+    image: mongo:5
+    volumes:
+      - mongo_data:/data/db
+    ports:
+      - "27017:27017"
+
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:6
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+
+  # Monitoring
+  prometheus:
+    image: prom/prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+
+  grafana:
+    image: grafana/grafana
+    depends_on:
+      - prometheus
+    volumes:
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+
+volumes:
+  kong_data:
+  mongo_data:
+  postgres_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:
